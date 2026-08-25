@@ -100,7 +100,10 @@ select.store{
 .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
 :root[data-theme="dark"] .btn.primary,:root:not([data-theme="light"]) .btn.primary{color:#08161D}
 .btn.primary:hover{background:var(--accent-2)}
-.btn:disabled{opacity:.5;cursor:default}
+.btn:disabled{opacity:.45;cursor:default}
+.btn.pendente{box-shadow:0 0 0 3px color-mix(in srgb, var(--warn) 35%, transparent);
+  background:var(--warn);border-color:var(--warn);color:#1B1206}
+.btn.pendente:hover{background:var(--warn);filter:brightness(1.08)}
 .btn.ghost{background:transparent;border-color:transparent;color:var(--text-2);padding:6px 8px}
 .btn.ghost:hover{background:var(--surface-2);color:var(--text)}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
@@ -109,6 +112,21 @@ select.store{
 .dot{width:7px;height:7px;border-radius:50%;background:var(--text-3)}
 .dot.dirty{background:var(--warn)}
 .dot.clean{background:var(--pos)}
+
+/* ---------- conta ---------- */
+.conta{position:relative;flex:none}
+.conta > .btn{padding:5px 8px;gap:5px}
+.conta .ini{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;
+  border-radius:50%;background:var(--accent-soft);color:var(--accent);font-size:11.5px;font-weight:700;
+  text-transform:uppercase}
+.conta .menu{position:absolute;right:0;top:calc(100% + 6px);z-index:80;min-width:212px;
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
+  box-shadow:var(--shadow);padding:5px;display:flex;flex-direction:column;gap:2px}
+.conta .quem{padding:8px 9px 9px;border-bottom:1px solid var(--line-soft);margin-bottom:4px}
+.conta .quem b{display:block;font-size:12.5px;font-weight:600;word-break:break-all;line-height:1.35;margin-top:2px}
+.conta .menu button{border:0;background:transparent;text-align:left;padding:7px 9px;border-radius:6px;
+  cursor:pointer;font-size:13px;font-weight:500;color:var(--neg)}
+.conta .menu button:hover{background:var(--neg-soft)}
 
 /* ---------- kpi ---------- */
 .kpis{flex:none;display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:1px;background:var(--line-soft);border-bottom:1px solid var(--line)}
@@ -295,6 +313,16 @@ dialog::backdrop{background:rgba(8,16,24,.5)}
   </div>
   <span class="grow"></span>
   <div class="savechip"><span class="dot" id="saveDot"></span><span id="saveTxt">salvo</span></div>
+  <div class="conta" id="conta" hidden>
+    <button class="btn ghost" id="btnConta" aria-haspopup="menu" aria-expanded="false">
+      <span class="ini" id="contaIni">?</span>
+      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><path d="m5 9 7 7 7-7"/></svg>
+    </button>
+    <div class="menu" id="contaMenu" role="menu" hidden>
+      <div class="quem"><span class="lbl">Conectado como</span><b id="contaEmail"></b></div>
+      <button role="menuitem" id="btnSairTopo">Sair da conta</button>
+    </div>
+  </div>
   <button class="btn" id="btnExport">Exportar CSV</button>
   <button class="btn primary" id="btnSave">Salvar</button>
 </header>
@@ -516,16 +544,39 @@ let ui = {
 };
 
 function markDirty(){ dirty = true; state.ts = Date.now(); saveLocal(); paintSave(); }
+function contarPendentes(){
+  let n = Object.keys(state.custos || {}).length;
+  Object.values(state.rates || {}).forEach(r => n += Object.keys(r).length);
+  Object.values(state.edits || {}).forEach(l => n += Object.keys(l).length);
+  return n;
+}
 function paintSave(){
   const noBanco = MODO === 'supabase';
-  document.getElementById('saveDot').className = 'dot ' + (dirty?'dirty':'clean');
+  const semLogin = noBanco && !INFO.logado;
+  const n = dirty ? contarPendentes() : 0;
+  const dot = document.getElementById('saveDot');
   const el = document.getElementById('saveTxt');
+  const btn = document.getElementById('btnSave');
+
+  if(semLogin){
+    dot.className = 'dot dirty';
+    el.textContent = 'sem login · só neste navegador';
+    el.parentElement.title = 'Você não entrou na sua conta, então nada vai para o banco. Entre para os ajustes valerem em outros aparelhos.';
+    btn.textContent = 'Entrar para salvar';
+    btn.classList.add('pendente');
+    btn.disabled = false;
+    return;
+  }
+  dot.className = 'dot ' + (dirty ? 'dirty' : 'clean');
   el.textContent = dirty
-    ? (noBanco ? 'só neste navegador' : 'alterações não publicadas')
+    ? (n === 1 ? '1 alteração só neste navegador' : n + ' alterações só neste navegador')
     : (noBanco ? 'salvo no banco' : 'salvo');
   el.parentElement.title = dirty
-    ? 'Seus ajustes estão guardados neste navegador e sobrevivem ao F5, mas ainda não valem nos outros computadores. Clique em Salvar.'
+    ? 'Guardado neste navegador (sobrevive ao F5), mas ainda não vale nos outros aparelhos. Clique em Salvar.'
     : (noBanco ? 'Tudo salvo no banco: vale em qualquer computador.' : 'Tudo salvo.');
+  btn.textContent = dirty ? `Salvar ${n} alteraç${n === 1 ? 'ão' : 'ões'}` : 'Salvar';
+  btn.classList.toggle('pendente', dirty);
+  btn.disabled = !dirty && noBanco;
 }
 
 /* ============ painel de variáveis ============ */
@@ -1003,6 +1054,21 @@ async function exportCSV(){
 /* ============ persistência publicada ============ */
 async function publishState(){
   const btn = document.getElementById('btnSave');
+
+  // No modo Supabase, salvar sem estar logado não grava nada no banco: em vez de
+  // dizer que salvou, pedimos o login.
+  if(MODO === 'supabase' && SB && !INFO.logado){
+    saveLocal();
+    const entrou = await telaLogin('Entre para que seus ajustes valham em todos os aparelhos.');
+    if(!entrou){ toast('Sem login, os ajustes continuam apenas neste navegador.'); paintSave(); return; }
+    INFO.logado = SB.logado;
+    try{ await carregarDoBanco(); }catch(e){}
+    const rascunho = loadLocal();
+    if(rascunho && rascunho.v){ const visto = INFO.estadoEm; state = rascunho; normalizarEstado(); state.visto_em = visto; dirty = true; }
+    buildLojas(); buildChan(); renderAll();
+    return publishState();
+  }
+
   btn.disabled = true; btn.textContent = 'Salvando…';
   saveLocal();
   let ok = false, msg = '';
@@ -1023,9 +1089,9 @@ async function publishState(){
         ? 'Sua sessão expirou. Recarregue a página e entre de novo — seus ajustes estão salvos neste navegador.'
         : ('Não deu para salvar no banco: ' + e.message + ' Seus ajustes continuam salvos neste navegador.');
     }
-    btn.disabled = false; btn.textContent = 'Salvar';
-    if(ok){ dirty = false; paintSave(); toast('Ajustes salvos no banco.'); }
+    if(ok){ dirty = false; toast('Ajustes salvos no banco — já valem em qualquer computador.'); }
     else toast(msg);
+    btn.disabled = false; paintSave();
     return;
   }
 
@@ -1043,9 +1109,9 @@ async function publishState(){
       msg = 'Ajustes salvos neste navegador.';
     }
   }catch(e){ msg = 'Ajustes salvos neste navegador.'; }
-  btn.disabled = false; btn.textContent = 'Salvar';
-  if(ok){ dirty = false; paintSave(); toast('Ajustes salvos na página.'); }
+  if(ok){ dirty = false; toast('Ajustes salvos na página.'); }
   else toast(msg);
+  btn.disabled = false; paintSave();
 }
 async function loadPublished(){
   try{
@@ -1217,7 +1283,7 @@ function telaLogin(mensagem){
 }
 
 /* ---- carga a partir do banco ---- */
-let INFO = { planilha:null, importacoes:[], carregadoDoBanco:false, status:'', estadoEm:null };
+let INFO = { planilha:null, importacoes:[], carregadoDoBanco:false, status:'', estadoEm:null, logado:false };
 
 async function carregarDoBanco(){
   const [lojas, produtos, linhas, estado, cfg, imports] = await Promise.all([
@@ -1303,7 +1369,7 @@ function renderDados(){
   const btn = document.getElementById('btnImportar');
   if(btn) btn.onclick = importarPlanilha;
   const sair = document.getElementById('btnSair');
-  if(sair) sair.onclick = ()=>{ SB.sair(); location.reload(); };
+  if(sair) sair.onclick = sairDaConta;
 }
 
 // O leitor de .xlsx (SheetJS) só é carregado quando você clica em Atualizar.
@@ -1381,6 +1447,22 @@ async function importarPlanilha(){
   }
 }
 
+function sairDaConta(){
+  if(dirty && !confirm('Você tem alterações que ainda não foram salvas no banco. Sair mesmo assim?')) return;
+  SB.sair();
+  try{ localStorage.removeItem(LS); }catch(e){}
+  location.reload();
+}
+function pintarConta(){
+  const box = document.getElementById('conta');
+  if(MODO !== 'supabase' || !INFO.logado){ box.hidden = true; return; }
+  const email = (SB && SB.email) || '';
+  box.hidden = false;
+  document.getElementById('contaIni').textContent = (email[0] || '?');
+  document.getElementById('contaEmail').textContent = email || '—';
+  document.getElementById('btnConta').title = 'Conectado como ' + email;
+}
+
 /* ============ toast ============ */
 let toastT;
 function toast(m){
@@ -1390,7 +1472,7 @@ function toast(m){
 }
 
 /* ============ boot ============ */
-function renderAll(){ renderPanel(); renderKpis(); renderTable(); paintSave(); }
+function renderAll(){ renderPanel(); renderKpis(); renderTable(); paintSave(); pintarConta(); }
 
 function measure(){
   const top = document.querySelector('header.top');
@@ -1425,6 +1507,17 @@ function buildChrome(){
   document.getElementById('q').addEventListener('input', e=>{ ui.q = e.target.value; ui.limit=150; renderTable(); renderKpis(); });
   document.getElementById('togglePanel').onclick = ()=>{ ui.panel = !ui.panel; document.getElementById('panel').classList.toggle('hide', !ui.panel); };
   document.getElementById('btnExport').onclick = exportCSV;
+  const menu = document.getElementById('contaMenu');
+  const btnConta = document.getElementById('btnConta');
+  btnConta.onclick = ev => {
+    ev.stopPropagation();
+    menu.hidden = !menu.hidden;
+    btnConta.setAttribute('aria-expanded', String(!menu.hidden));
+  };
+  document.addEventListener('click', ev => {
+    if(!menu.hidden && !ev.target.closest('#conta')){ menu.hidden = true; btnConta.setAttribute('aria-expanded','false'); }
+  });
+  document.getElementById('btnSairTopo').onclick = sairDaConta;
   document.getElementById('btnSave').onclick = publishState;
   document.getElementById('tabPrec').onclick = ()=>setTab('prec');
   document.getElementById('tabCusto').onclick = ()=>setTab('custo');
@@ -1500,7 +1593,8 @@ async function bootSupabase(){
     state.visto_em = visto;
     dirty = true;
   }
-  if(!entrou) toast('Sem login: mostrando os dados embutidos na página.');
+  INFO.logado = !!entrou && SB.logado;
+  if(!entrou) toast('Sem login: os ajustes ficam só neste navegador.');
   else if(dirty) toast('Você tem ajustes ainda não salvos no banco. Clique em Salvar para valerem em todos os computadores.');
   if(!STORES.some(s=>s.id===ui.store)) ui.store = lojaPadrao();
   const st = storeById(ui.store);
