@@ -517,8 +517,15 @@ let ui = {
 
 function markDirty(){ dirty = true; state.ts = Date.now(); saveLocal(); paintSave(); }
 function paintSave(){
+  const noBanco = MODO === 'supabase';
   document.getElementById('saveDot').className = 'dot ' + (dirty?'dirty':'clean');
-  document.getElementById('saveTxt').textContent = dirty ? 'alterações não publicadas' : 'salvo';
+  const el = document.getElementById('saveTxt');
+  el.textContent = dirty
+    ? (noBanco ? 'só neste navegador' : 'alterações não publicadas')
+    : (noBanco ? 'salvo no banco' : 'salvo');
+  el.parentElement.title = dirty
+    ? 'Seus ajustes estão guardados neste navegador e sobrevivem ao F5, mas ainda não valem nos outros computadores. Clique em Salvar.'
+    : (noBanco ? 'Tudo salvo no banco: vale em qualquer computador.' : 'Tudo salvo.');
 }
 
 /* ============ painel de variáveis ============ */
@@ -1210,7 +1217,7 @@ function telaLogin(mensagem){
 }
 
 /* ---- carga a partir do banco ---- */
-let INFO = { planilha:null, importacoes:[], carregadoDoBanco:false, status:'' };
+let INFO = { planilha:null, importacoes:[], carregadoDoBanco:false, status:'', estadoEm:null };
 
 async function carregarDoBanco(){
   const [lojas, produtos, linhas, estado, cfg, imports] = await Promise.all([
@@ -1229,7 +1236,9 @@ async function carregarDoBanco(){
   INFO.planilha = (cfg && cfg[0]) ? cfg[0].valor : null;
   INFO.importacoes = imports || [];
   const e = estado && estado[0];
-  if(e && e.dados && e.dados.v){ state = e.dados; state.visto_em = e.atualizado_em; }
+  INFO.estadoEm = e ? e.atualizado_em : null;
+  if(e && e.dados && e.dados.v){ state = e.dados; }
+  state.visto_em = INFO.estadoEm;
 }
 
 /* ---- aba de dados ---- */
@@ -1393,6 +1402,11 @@ function measure(){
   document.documentElement.style.setProperty('--h-head', (h1+h2)+'px');
 }
 window.addEventListener('resize', measure);
+window.addEventListener('beforeunload', ev => {
+  if(!dirty) return;
+  ev.preventDefault();
+  ev.returnValue = '';
+});
 
 function buildLojas(){
   const sel = document.getElementById('storeSel');
@@ -1478,11 +1492,16 @@ async function bootSupabase(){
     }
   }
   normalizarEstado();
-  if(!entrou){
-    const loc = loadLocal();
-    if(loc && loc.v){ state = loc; normalizarEstado(); dirty = true; }
-    toast('Sem login: mostrando os dados embutidos na página.');
+  const rascunho = loadLocal();
+  const salvoEm = INFO.estadoEm ? Date.parse(INFO.estadoEm) : 0;
+  if(rascunho && rascunho.v && (rascunho.ts || 0) > salvoEm){
+    const visto = state.visto_em;
+    state = rascunho; normalizarEstado();
+    state.visto_em = visto;
+    dirty = true;
   }
+  if(!entrou) toast('Sem login: mostrando os dados embutidos na página.');
+  else if(dirty) toast('Você tem ajustes ainda não salvos no banco. Clique em Salvar para valerem em todos os computadores.');
   if(!STORES.some(s=>s.id===ui.store)) ui.store = lojaPadrao();
   const st = storeById(ui.store);
   if(!st.canais.some(c=>c.key===ui.chan)) ui.chan = st.canais[0].key;
