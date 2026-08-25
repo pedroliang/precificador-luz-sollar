@@ -2,3 +2,7 @@
 book.xlsx
 node_modules/
 *.log
+
+# suas chaves do Supabase (crie a partir do config.example.js)
+# descomente se preferir NÃO versionar
+# config.js
