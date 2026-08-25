@@ -450,6 +450,20 @@ function calc(store, i, chan){
           promoKey, rebKey, ovMin, ovVen, ovOri};
 }
 
+/* margem vs. lucro alvo: verde bate a meta, laranja fica abaixo dela, vermelho dá prejuízo.
+   A folga de 0,05 p.p. evita que 4,999...% (arredondamento binário) apareça como abaixo da meta. */
+const MARGIN_EPS = 5e-4;
+function pillClass(v, alvo){
+  if(v==null || !isFinite(v)) return 'mut';
+  if(v < -MARGIN_EPS) return 'neg';
+  const meta = (alvo!=null && isFinite(alvo)) ? alvo : 0.05;
+  return v < meta - MARGIN_EPS ? 'warn' : 'pos';
+}
+function marginColor(v, alvo){
+  const k = pillClass(v, alvo);
+  return k==='neg' ? 'var(--neg)' : (k==='warn' ? 'var(--warn)' : (k==='pos' ? 'var(--pos)' : 'var(--text-3)'));
+}
+
 /* ============ UI state ============ */
 let ui = {
   store: STORES[0].id,
@@ -487,6 +501,12 @@ function renderPanel(){
   });
   h += `<div style="display:flex;gap:6px;margin-top:9px"><button class="btn" id="resetRates" style="flex:1">Restaurar padrões</button></div>`;
   h += `<p class="note" style="margin-top:11px">Todas em %. Ao alterar aqui, o valor passa a valer para todos os produtos da loja — só não vale nas linhas em que você travou uma taxa específica no painel do produto.</p></div>`;
+
+  h += `<div class="pgroup"><span class="lbl">Como ler as cores</span>
+    <div class="vrow"><label><span class="pill pos">verde</span> margem igual ou acima do lucro alvo</label></div>
+    <div class="vrow"><label><span class="pill warn">laranja</span> lucro positivo, mas abaixo do alvo</label></div>
+    <div class="vrow"><label><span class="pill neg">vermelho</span> prejuízo na venda</label></div>
+    <p class="note" style="margin-top:9px">Valores em <b style="color:var(--accent)">azul com ponto</b> foram alterados por você — o resto vem da planilha.</p></div>`;
 
   h += '<div class="pgroup"><span class="lbl">Filtros</span>';
   const F = [['promo','Com promoção ativa'],['neg','Margem negativa'],['abaixo','Preço de venda acima do mercado'],['mod','Somente editados'],['semCusto','Sem custo cadastrado']];
@@ -537,7 +557,7 @@ function filtered(){
     if(f.promo || f.neg || f.abaixo || f.semCusto){
       const c = calc(st, i, ui.chan);
       if(f.promo && c.promo==null) continue;
-      if(f.neg && !(c.margem!=null && c.margem<0)) continue;
+      if(f.neg && !(c.margem!=null && c.margem < -MARGIN_EPS)) continue;
       if(f.abaixo && !(c.mktAvg!=null && c.ven!=null && c.ven > c.mktAvg)) continue;
       if(f.semCusto && c.custo!=null) continue;
     }
@@ -554,7 +574,7 @@ function renderKpis(){
   let neg=0, promo=0, mod=0, semCusto=0, msum=0, mn=0, abaixo=0;
   idx.forEach(i=>{
     const c = calc(st, i, ui.chan);
-    if(c.promo!=null){ promo++; if(c.margem!=null && c.margem<0) neg++; }
+    if(c.promo!=null){ promo++; if(c.margem!=null && c.margem < -MARGIN_EPS) neg++; }
     if(edits(st.id,i)) mod++;
     if(c.custo==null) semCusto++;
     if(c.margemVenda!=null){ msum+=c.margemVenda; mn++; }
@@ -636,7 +656,7 @@ function renderTable(){
       if(col.pctpill){
         const v = c[col.k];
         let p = '<span class="pill mut">—</span>';
-        if(v!=null && isFinite(v)) p = `<span class="pill ${v<0?'neg':(v<0.05?'warn':'pos')}">${fmtPct(v)}</span>`;
+        if(v!=null && isFinite(v)) p = `<span class="pill ${pillClass(v, c.lucroPct)}">${fmtPct(v)}</span>`;
         h += `<td class="num ${sep}">${p}</td>`; return;
       }
       let val, mod=false, edf=null;
@@ -801,7 +821,7 @@ function renderDrawer(){
     <label class="fld"><span>Preço mínimo</span><input data-dov="${ui.chan}_min" value="${c.min==null?'':fmtNum(c.min)}"></label>
     <label class="fld"><span>Preço de venda</span><input data-dov="${ui.chan}_ven" value="${c.ven==null?'':fmtNum(c.ven)}"></label>
     <label class="fld"><span>Preço original (÷0,8)</span><input data-dov="${ui.chan}_ori" value="${c.ori==null?'':fmtNum(c.ori)}"></label>
-    <div class="fld out"><span>Margem no preço de venda</span><b class="${c.margemVenda!=null&&c.margemVenda<0?'':''}" style="color:${c.margemVenda==null?'var(--text-3)':(c.margemVenda<0?'var(--neg)':'var(--pos)')}">${fmtPct(c.margemVenda)}</b></div>
+    <div class="fld out"><span>Margem no preço de venda</span><b style="color:${marginColor(c.margemVenda, c.lucroPct)}">${fmtPct(c.margemVenda)}</b></div>
   </div>
   <p class="note" style="margin-top:8px">Editar um preço aqui cria uma trava manual (como um valor digitado na planilha). Deixe em branco para voltar à fórmula.</p></div>`;
 
@@ -811,7 +831,7 @@ function renderDrawer(){
     ${c.fdet.map(([l,v])=>`<div><span>${l}</span><b>−${fmtBRL(v)}</b></div>`).join('')}
     <div><span>Custo líquido do produto</span><b>−${fmtBRL(c.custoLiq)}</b></div>
     ${st.plat==='meli' && c.reb ? `<div><span>Rebate</span><b>+${fmtBRL(c.reb)}</b></div>`:''}
-    <div class="tot"><span>Lucro final</span><b style="color:${refLucro==null?'var(--text-3)':(refLucro<0?'var(--neg)':'var(--pos)')}">${fmtBRL(refLucro)} · ${fmtPct(refMargem)}</b></div>
+    <div class="tot"><span>Lucro final</span><b style="color:${marginColor(refMargem, c.lucroPct)}">${fmtBRL(refLucro)} · ${fmtPct(refMargem)}</b></div>
   </div>`;
   if(c.promo==null) h += `<p class="note" style="margin-top:8px">Sem promoção ativa nesta linha. Preencha <b>Promoção ativa</b> acima para simular um preço promocional.</p>`;
   h += `</div>`;
