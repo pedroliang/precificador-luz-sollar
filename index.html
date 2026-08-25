@@ -148,7 +148,7 @@ aside.panel.hide{display:none}
 .tabbar .count{color:var(--text-3);font-weight:500;font-size:12px}
 
 .tablewrap{flex:1 1 auto;min-height:0;overflow:auto;background:var(--surface)}
-table{border-collapse:separate;border-spacing:0;width:100%;min-width:1180px}
+table{border-collapse:separate;border-spacing:0;width:100%;min-width:1280px}
 thead th{
   position:sticky;top:0;z-index:20;background:var(--surface-2);
   font-size:10.5px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--text-3);
@@ -174,7 +174,7 @@ td input.cell{
   background:var(--surface);font-family:"IBM Plex Mono",monospace;font-size:12.5px;
 }
 .sep{border-left:1px solid var(--line)}
-.pill{display:inline-block;padding:1px 7px;border-radius:20px;font-size:11px;font-weight:600;font-family:"IBM Plex Mono",monospace}
+.pill{display:inline-block;padding:1px 7px;border-radius:20px;font-size:11px;font-weight:600;font-family:"IBM Plex Mono",monospace;white-space:nowrap}
 .pill.pos{background:var(--pos-soft);color:var(--pos)}
 .pill.neg{background:var(--neg-soft);color:var(--neg)}
 .pill.warn{background:var(--warn-soft);color:var(--warn)}
@@ -506,6 +506,7 @@ function renderPanel(){
     <div class="vrow"><label><span class="pill pos">verde</span> margem igual ou acima do lucro alvo</label></div>
     <div class="vrow"><label><span class="pill warn">laranja</span> lucro positivo, mas abaixo do alvo</label></div>
     <div class="vrow"><label><span class="pill neg">vermelho</span> prejuízo na venda</label></div>
+    <p class="note" style="margin-top:9px">Na última coluna a leitura muda: ela compara o seu preço com a média da pesquisa de mercado, então <b style="color:var(--pos)">verde</b> é estar mais barato que os concorrentes e <b style="color:var(--neg)">vermelho</b> é estar mais caro.</p>
     <p class="note" style="margin-top:9px">Valores em <b style="color:var(--accent)">azul com ponto</b> foram alterados por você — o resto vem da planilha.</p></div>`;
 
   h += '<div class="pgroup"><span class="lbl">Filtros</span>';
@@ -608,8 +609,8 @@ const COLS_MELI = [
   {k:'reb',   l:'Rebate', edr:1, money:1},
   {k:'lucroFinal', l:'Lucro', money:1},
   {k:'margem', l:'Margem', pctpill:1},
-  {k:'mktAvg', l:'Mercado', money:1, sep:1, dim:1},
-  {k:'delta', l:'vs. venda', deltapill:1}
+  {k:'mktAvg', l:'Média mercado', money:1, sep:1, dim:1},
+  {k:'delta', l:'Venda vs. mercado', deltapill:1}
 ];
 function cols(){
   const st = storeById(ui.store);
@@ -647,9 +648,13 @@ function renderTable(){
       if(col.k==='nome'){ h += `<td class="l prod ${sep}" title="${esc(row.nome)}">${esc(row.nome)}</td>`; return; }
       if(col.k==='delta'){
         let p='<span class="pill mut">—</span>';
-        if(c.mktAvg!=null && c.ven!=null){
+        if(c.mktAvg!=null && c.ven!=null && c.mktAvg>0){
           const d = (c.ven-c.mktAvg)/c.mktAvg;
-          p = `<span class="pill ${d>0.05?'neg':(d<-0.05?'pos':'warn')}">${d>0?'+':''}${(d*100).toFixed(0)}%</span>`;
+          const cls = d>0.05?'neg':(d<-0.05?'pos':'warn');
+          const pc = Math.round(Math.abs(d)*100);
+          const txt = cls==='warn' ? 'na média' : (d>0 ? pc+'% mais caro' : pc+'% mais barato');
+          const tip = `Seu preço de venda é ${fmtBRL(c.ven)} e a média pesquisada é ${fmtBRL(c.mktAvg)}.`;
+          p = `<span class="pill ${cls}" title="${tip}">${txt}</span>`;
         }
         h += `<td class="num ${sep}">${p}</td>`; return;
       }
