@@ -47,6 +47,8 @@
   --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.35);
 }
 *{box-sizing:border-box}
+/* o display dos componentes vence o display:none padrão do atributo hidden */
+[hidden]{display:none !important}
 body{
   margin:0; background:var(--bg); color:var(--text);
   font-family:Archivo,"Helvetica Neue",Arial,sans-serif;
@@ -108,7 +110,10 @@ select.store{
 .btn.ghost:hover{background:var(--surface-2);color:var(--text)}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
 
-.savechip{font-size:11.5px;color:var(--text-3);display:flex;align-items:center;gap:5px;white-space:nowrap}
+.savechip{font-size:11.5px;color:var(--text-3);display:flex;align-items:center;gap:5px;white-space:nowrap;
+  background:transparent;border:0;padding:4px 6px;border-radius:6px;cursor:default;font-family:inherit}
+.savechip.clicavel{cursor:pointer;color:var(--warn)}
+.savechip.clicavel:hover{background:var(--warn-soft)}
 .dot{width:7px;height:7px;border-radius:50%;background:var(--text-3)}
 .dot.dirty{background:var(--warn)}
 .dot.clean{background:var(--pos)}
@@ -301,7 +306,7 @@ dialog::backdrop{background:rgba(8,16,24,.5)}
     <input id="q" type="search" placeholder="Buscar por SKU ou descrição do produto…" autocomplete="off">
   </div>
   <span class="grow"></span>
-  <div class="savechip"><span class="dot" id="saveDot"></span><span id="saveTxt">salvo</span></div>
+  <button class="savechip" id="chipSave" type="button"><span class="dot" id="saveDot"></span><span id="saveTxt">salvo</span></button>
   <button class="btn ghost sair" id="btnSair2" hidden>Sair</button>
   <button class="btn" id="btnExport">Exportar CSV</button>
   <button class="btn primary" id="btnSave">Salvar</button>
@@ -345,7 +350,7 @@ dialog::backdrop{background:rgba(8,16,24,.5)}
 "use strict";
 const DATA = JSON.parse(document.getElementById('dataset').textContent);
 let STORES = DATA.stores, PRODUTOS = DATA.produtos;
-const VERSAO = '26/08 08:24';
+const VERSAO = '26/08 09:16';
 const CFG = window.PRECIFICADOR_CONFIG || null;
 const MODO = (CFG && CFG.url && CFG.anonKey) ? 'supabase' : 'local';
 
@@ -580,12 +585,20 @@ function paintSave(){
   const n = dirty ? contarPendentes() : 0;
   const dot = document.getElementById('saveDot');
   const el = document.getElementById('saveTxt');
+  const chip = document.getElementById('chipSave');
   const btn = document.getElementById('btnSave');
+
+  // Com Supabase o painel salva sozinho: o botão manual só atrapalha.
+  // Sem banco (arquivo solto ou artifact) ele continua sendo o único jeito.
+  btn.hidden = noBanco;
+  chip.classList.remove('clicavel');
 
   if(semLogin){
     dot.className = 'dot dirty';
     el.textContent = 'sem login · só neste navegador';
-    el.parentElement.title = 'Você não entrou na sua conta, então nada vai para o banco. Entre para os ajustes valerem em outros aparelhos.';
+    chip.title = 'Você não entrou na sua conta, então nada vai para o banco. Clique para entrar.';
+    chip.classList.add('clicavel');
+    btn.hidden = false;
     btn.textContent = 'Entrar para salvar';
     btn.classList.add('pendente');
     btn.disabled = false;
@@ -594,22 +607,29 @@ function paintSave(){
   if(salvandoAgora){
     dot.className = 'dot dirty';
     el.innerHTML = '<span class="spin"></span> salvando…';
-    el.parentElement.title = 'Gravando seus ajustes no banco.';
+    chip.title = 'Gravando seus ajustes no banco.';
     btn.textContent = 'Salvando…';
     btn.classList.remove('pendente');
     btn.disabled = true;
     return;
   }
   dot.className = 'dot ' + (dirty ? 'dirty' : 'clean');
-  el.textContent = dirty
-    ? (n === 1 ? '1 alteração só neste navegador' : n + ' alterações só neste navegador')
-    : (noBanco ? 'salvo no banco' : 'salvo');
-  el.parentElement.title = dirty
-    ? 'Guardado neste navegador (sobrevive ao F5), mas ainda não vale nos outros aparelhos. Clique em Salvar.'
-    : (noBanco ? 'Tudo salvo no banco: vale em qualquer computador.' : 'Tudo salvo.');
+  if(dirty && noBanco){
+    // só chega aqui se a gravação automática não conseguiu ir
+    el.textContent = n === 1 ? '1 alteração não gravada' : n + ' alterações não gravadas';
+    chip.title = 'Guardado neste navegador, mas ainda não foi para o banco. Clique para tentar de novo.';
+    chip.classList.add('clicavel');
+  } else {
+    el.textContent = dirty
+      ? (n === 1 ? '1 alteração não salva' : n + ' alterações não salvas')
+      : (noBanco ? 'salvo no banco' : 'salvo');
+    chip.title = dirty
+      ? 'Guardado neste navegador. Clique em Salvar para publicar.'
+      : (noBanco ? 'Tudo salvo no banco: vale em qualquer computador.' : 'Tudo salvo.');
+  }
   btn.textContent = dirty ? `Salvar ${n} alteraç${n === 1 ? 'ão' : 'ões'}` : 'Salvar';
   btn.classList.toggle('pendente', dirty);
-  btn.disabled = !dirty && noBanco;
+  btn.disabled = !dirty;
 }
 
 /* ============ painel de variáveis ============ */
@@ -1542,6 +1562,9 @@ function buildChrome(){
   document.getElementById('q').addEventListener('input', e=>{ ui.q = e.target.value; ui.limit=150; renderTable(); renderKpis(); });
   document.getElementById('togglePanel').onclick = ()=>{ ui.panel = !ui.panel; document.getElementById('panel').classList.toggle('hide', !ui.panel); };
   document.getElementById('btnExport').onclick = exportCSV;
+  document.getElementById('btnSave').onclick = publishState;
+  // o indicador também salva, para quando a gravação automática falhar
+  document.getElementById('chipSave').onclick = () => { if(dirty || (MODO === 'supabase' && !INFO.logado)) publishState(); };
   document.getElementById('btnSair2').onclick = sairDaConta;
   document.getElementById('tabPrec').onclick = ()=>setTab('prec');
   document.getElementById('tabCusto').onclick = ()=>setTab('custo');
