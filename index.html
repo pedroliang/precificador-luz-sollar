@@ -113,20 +113,9 @@ select.store{
 .dot.dirty{background:var(--warn)}
 .dot.clean{background:var(--pos)}
 
-/* ---------- conta ---------- */
-.conta{position:relative;flex:none}
-.conta > .btn{padding:5px 8px;gap:5px}
-.conta .ini{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;
-  border-radius:50%;background:var(--accent-soft);color:var(--accent);font-size:11.5px;font-weight:700;
-  text-transform:uppercase}
-.conta .menu{position:absolute;right:0;top:calc(100% + 6px);z-index:80;min-width:212px;
-  background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
-  box-shadow:var(--shadow);padding:5px;display:flex;flex-direction:column;gap:2px}
-.conta .quem{padding:8px 9px 9px;border-bottom:1px solid var(--line-soft);margin-bottom:4px}
-.conta .quem b{display:block;font-size:12.5px;font-weight:600;word-break:break-all;line-height:1.35;margin-top:2px}
-.conta .menu button{border:0;background:transparent;text-align:left;padding:7px 9px;border-radius:6px;
-  cursor:pointer;font-size:13px;font-weight:500;color:var(--neg)}
-.conta .menu button:hover{background:var(--neg-soft)}
+/* ---------- sair ---------- */
+.btn.sair{flex:none;color:var(--text-3);font-weight:600}
+.btn.sair:hover{color:var(--neg);background:var(--neg-soft)}
 
 /* ---------- kpi ---------- */
 .kpis{flex:none;display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:1px;background:var(--line-soft);border-bottom:1px solid var(--line)}
@@ -313,16 +302,7 @@ dialog::backdrop{background:rgba(8,16,24,.5)}
   </div>
   <span class="grow"></span>
   <div class="savechip"><span class="dot" id="saveDot"></span><span id="saveTxt">salvo</span></div>
-  <div class="conta" id="conta" hidden>
-    <button class="btn ghost" id="btnConta" aria-haspopup="menu" aria-expanded="false">
-      <span class="ini" id="contaIni">?</span>
-      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><path d="m5 9 7 7 7-7"/></svg>
-    </button>
-    <div class="menu" id="contaMenu" role="menu" hidden>
-      <div class="quem"><span class="lbl">Conectado como</span><b id="contaEmail"></b></div>
-      <button role="menuitem" id="btnSairTopo">Sair da conta</button>
-    </div>
-  </div>
+  <button class="btn ghost sair" id="btnSair2" hidden>Sair</button>
   <button class="btn" id="btnExport">Exportar CSV</button>
   <button class="btn primary" id="btnSave">Salvar</button>
 </header>
@@ -365,6 +345,7 @@ dialog::backdrop{background:rgba(8,16,24,.5)}
 "use strict";
 const DATA = JSON.parse(document.getElementById('dataset').textContent);
 let STORES = DATA.stores, PRODUTOS = DATA.produtos;
+const VERSAO = '26/08 08:18';
 const CFG = window.PRECIFICADOR_CONFIG || null;
 const MODO = (CFG && CFG.url && CFG.anonKey) ? 'supabase' : 'local';
 
@@ -614,7 +595,8 @@ function renderPanel(){
   h += `<div class="pgroup"><span class="lbl">Dados</span>
     <p class="note">Fonte: planilha <b>Cópia de Luz sollar</b> — abas GERAL de cada loja + Custo Produtos + Pesquisa de Mercado.<br><br>
     ${STORES.length} lojas · ${STORES.reduce((a,s)=>a+s.rows.length,0).toLocaleString('pt-BR')} linhas · ${Object.keys(PRODUTOS).length} produtos no catálogo.</p>
-    <div style="display:flex;gap:6px;margin-top:9px"><button class="btn" id="resetAll" style="flex:1">Descartar meus ajustes</button></div></div>`;
+    <div style="display:flex;gap:6px;margin-top:9px"><button class="btn" id="resetAll" style="flex:1">Descartar meus ajustes</button></div>
+    <p class="note" style="margin-top:11px;border-left-color:var(--accent)">Versão do painel: <b class="mono">${VERSAO}</b></p></div>`;
   document.getElementById('panel').innerHTML = h;
   document.getElementById('panel').classList.toggle('hide', !ui.panel);
 
@@ -1454,13 +1436,10 @@ function sairDaConta(){
   location.reload();
 }
 function pintarConta(){
-  const box = document.getElementById('conta');
-  if(MODO !== 'supabase' || !INFO.logado){ box.hidden = true; return; }
-  const email = (SB && SB.email) || '';
-  box.hidden = false;
-  document.getElementById('contaIni').textContent = (email[0] || '?');
-  document.getElementById('contaEmail').textContent = email || '—';
-  document.getElementById('btnConta').title = 'Conectado como ' + email;
+  const btn = document.getElementById('btnSair2');
+  if(MODO !== 'supabase' || !INFO.logado){ btn.hidden = true; return; }
+  btn.hidden = false;
+  btn.title = 'Conectado como ' + ((SB && SB.email) || '—') + ' — clique para sair';
 }
 
 /* ============ toast ============ */
@@ -1507,18 +1486,7 @@ function buildChrome(){
   document.getElementById('q').addEventListener('input', e=>{ ui.q = e.target.value; ui.limit=150; renderTable(); renderKpis(); });
   document.getElementById('togglePanel').onclick = ()=>{ ui.panel = !ui.panel; document.getElementById('panel').classList.toggle('hide', !ui.panel); };
   document.getElementById('btnExport').onclick = exportCSV;
-  const menu = document.getElementById('contaMenu');
-  const btnConta = document.getElementById('btnConta');
-  btnConta.onclick = ev => {
-    ev.stopPropagation();
-    menu.hidden = !menu.hidden;
-    btnConta.setAttribute('aria-expanded', String(!menu.hidden));
-  };
-  document.addEventListener('click', ev => {
-    if(!menu.hidden && !ev.target.closest('#conta')){ menu.hidden = true; btnConta.setAttribute('aria-expanded','false'); }
-  });
-  document.getElementById('btnSairTopo').onclick = sairDaConta;
-  document.getElementById('btnSave').onclick = publishState;
+  document.getElementById('btnSair2').onclick = sairDaConta;
   document.getElementById('tabPrec').onclick = ()=>setTab('prec');
   document.getElementById('tabCusto').onclick = ()=>setTab('custo');
   const td = document.getElementById('tabDados');
