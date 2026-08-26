@@ -345,7 +345,7 @@ dialog::backdrop{background:rgba(8,16,24,.5)}
 "use strict";
 const DATA = JSON.parse(document.getElementById('dataset').textContent);
 let STORES = DATA.stores, PRODUTOS = DATA.produtos;
-const VERSAO = '26/08 08:18';
+const VERSAO = '26/08 08:24';
 const CFG = window.PRECIFICADOR_CONFIG || null;
 const MODO = (CFG && CFG.url && CFG.anonKey) ? 'supabase' : 'local';
 
@@ -524,7 +524,50 @@ let ui = {
   panel: window.innerWidth > 900
 };
 
-function markDirty(){ dirty = true; state.ts = Date.now(); saveLocal(); paintSave(); }
+let salvandoAgora = false, salvarDaqui = null, repetirSalvamento = false, avisouConflito = false;
+
+function markDirty(){
+  dirty = true; state.ts = Date.now(); saveLocal(); paintSave();
+  agendarSalvamento();
+}
+
+/** No modo Supabase o painel salva sozinho pouco depois da última edição. */
+function agendarSalvamento(){
+  if(MODO !== 'supabase' || !SB || !INFO.logado) return;
+  clearTimeout(salvarDaqui);
+  salvarDaqui = setTimeout(salvarAutomatico, 1200);
+}
+
+async function salvarAutomatico(){
+  if(!dirty || MODO !== 'supabase' || !SB || !INFO.logado) return;
+  if(salvandoAgora){ repetirSalvamento = true; return; }
+  salvandoAgora = true; paintSave();
+  try{
+    const r = await SB.req('/rest/v1/rpc/salvar_estado', {method:'POST', body:{
+      p_id: 'padrao', p_dados: state, p_visto_em: state.visto_em || null
+    }});
+    if(r && r.status === 'conflito'){
+      if(!avisouConflito){
+        avisouConflito = true;
+        toast('Alguém salvou depois de você abrir a página. Recarregue antes de continuar, senão um de vocês perde o trabalho.');
+      }
+    } else {
+      state.visto_em = r && r.atualizado_em;
+      dirty = false;
+      avisouConflito = false;
+    }
+  }catch(e){
+    // fica pendente: o indicador continua em "só neste navegador" e a próxima
+    // edição — ou o botão Salvar — tenta de novo.
+  }
+  salvandoAgora = false; paintSave();
+  if(repetirSalvamento){ repetirSalvamento = false; agendarSalvamento(); }
+}
+
+// se a aba for escondida ou fechada com algo pendente, tenta salvar na hora
+document.addEventListener('visibilitychange', () => {
+  if(document.visibilityState === 'hidden' && dirty){ clearTimeout(salvarDaqui); salvarAutomatico(); }
+});
 function contarPendentes(){
   let n = Object.keys(state.custos || {}).length;
   Object.values(state.rates || {}).forEach(r => n += Object.keys(r).length);
@@ -546,6 +589,15 @@ function paintSave(){
     btn.textContent = 'Entrar para salvar';
     btn.classList.add('pendente');
     btn.disabled = false;
+    return;
+  }
+  if(salvandoAgora){
+    dot.className = 'dot dirty';
+    el.innerHTML = '<span class="spin"></span> salvando…';
+    el.parentElement.title = 'Gravando seus ajustes no banco.';
+    btn.textContent = 'Salvando…';
+    btn.classList.remove('pendente');
+    btn.disabled = true;
     return;
   }
   dot.className = 'dot ' + (dirty ? 'dirty' : 'clean');
@@ -596,7 +648,10 @@ function renderPanel(){
     <p class="note">Fonte: planilha <b>Cópia de Luz sollar</b> — abas GERAL de cada loja + Custo Produtos + Pesquisa de Mercado.<br><br>
     ${STORES.length} lojas · ${STORES.reduce((a,s)=>a+s.rows.length,0).toLocaleString('pt-BR')} linhas · ${Object.keys(PRODUTOS).length} produtos no catálogo.</p>
     <div style="display:flex;gap:6px;margin-top:9px"><button class="btn" id="resetAll" style="flex:1">Descartar meus ajustes</button></div>
-    <p class="note" style="margin-top:11px;border-left-color:var(--accent)">Versão do painel: <b class="mono">${VERSAO}</b></p></div>`;
+    <p class="note" style="margin-top:11px">${MODO === 'supabase'
+      ? 'Seus ajustes são salvos no banco automaticamente, cerca de um segundo depois da última edição.'
+      : 'Seus ajustes ficam salvos neste navegador.'}</p>
+    <p class="note" style="margin-top:9px;border-left-color:var(--accent)">Versão do painel: <b class="mono">${VERSAO}</b></p></div>`;
   document.getElementById('panel').innerHTML = h;
   document.getElementById('panel').classList.toggle('hide', !ui.panel);
 
@@ -1051,6 +1106,7 @@ async function publishState(){
     return publishState();
   }
 
+  clearTimeout(salvarDaqui);
   btn.disabled = true; btn.textContent = 'Salvando…';
   saveLocal();
   let ok = false, msg = '';
