@@ -1,7 +1,10 @@
 // Projeto Supabase do Precificador.
 //
-// A chave "anon" é pública por natureza: sozinha ela não lê nada, porque todas
-// as tabelas exigem usuário logado (RLS). NUNCA coloque aqui a service_role.
+// A chave "anon" é pública por natureza. Com ela dá para LER os dados do painel
+// (lojas, produtos, linhas e os ajustes) — a leitura é aberta de propósito, para
+// que quem não tem login veja os números. Escrever, importar a planilha e ver o
+// link do Google Sheets continuam exigindo usuário logado.
+// NUNCA coloque aqui a service_role.
 
 window.PRECIFICADOR_CONFIG = {
   url: "https://zvmpfsslhyjqwasvxlej.supabase.co",

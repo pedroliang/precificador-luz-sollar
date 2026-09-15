@@ -350,7 +350,7 @@ dialog::backdrop{background:rgba(8,16,24,.5)}
 "use strict";
 const DATA = JSON.parse(document.getElementById('dataset').textContent);
 let STORES = DATA.stores, PRODUTOS = DATA.produtos;
-const VERSAO = '26/08 09:16';
+const VERSAO = '15/09 leitura pública';
 const CFG = window.PRECIFICADOR_CONFIG || null;
 const MODO = (CFG && CFG.url && CFG.anonKey) ? 'supabase' : 'local';
 
@@ -548,7 +548,7 @@ async function salvarAutomatico(){
   if(salvandoAgora){ repetirSalvamento = true; return; }
   salvandoAgora = true; paintSave();
   try{
-    const r = await SB.req('/rest/v1/rpc/salvar_estado', {method:'POST', body:{
+    const r = await SB.req('/rest/v1/rpc/salvar_estado', {method:'POST', exigeSessao:true, body:{
       p_id: 'padrao', p_dados: state, p_visto_em: state.visto_em || null
     }});
     if(r && r.status === 'conflito'){
@@ -1133,7 +1133,7 @@ async function publishState(){
 
   if(MODO === 'supabase' && SB && SB.logado){
     try{
-      const r = await SB.req('/rest/v1/rpc/salvar_estado', {method:'POST', body:{
+      const r = await SB.req('/rest/v1/rpc/salvar_estado', {method:'POST', exigeSessao:true, body:{
         p_id: 'padrao', p_dados: state, p_visto_em: state.visto_em || null
       }});
       if(r && r.status === 'conflito'){
@@ -1215,12 +1215,15 @@ const SB = (function(){
   async function req(caminho, opts){
     opts = opts || {};
     const t = await token();
-    if(!t) throw Object.assign(new Error('Sessão expirada.'), {semSessao:true});
+    // Sem sessão seguimos com a chave anônima: o RLS libera a LEITURA dos dados
+    // do painel para qualquer visitante. Quem grava passa exigeSessao e continua
+    // precisando estar logado.
+    if(!t && opts.exigeSessao) throw Object.assign(new Error('Sessão expirada.'), {semSessao:true});
     const r = await fetch(base + caminho, {
       method: opts.method || 'GET',
       headers: Object.assign({
         apikey: CFG.anonKey,
-        Authorization: 'Bearer ' + t,
+        Authorization: 'Bearer ' + (t || CFG.anonKey),
         'Content-Type':'application/json'
       }, opts.headers || {}),
       body: opts.body ? JSON.stringify(opts.body) : undefined
@@ -1312,12 +1315,12 @@ function telaLogin(mensagem){
         <path d="M9.6 19h4.8M10.4 21.5h3.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
       </svg>
       <h2>Precificador</h2>
-      <p class="sub">Entre para ver os preços das lojas.</p>
+      <p class="sub">Entre para editar. Para só consultar, veja sem entrar.</p>
       <div class="erro" hidden></div>
       <label><span>E-mail</span><input type="email" name="email" autocomplete="username" required></label>
       <label><span>Senha</span><input type="password" name="senha" autocomplete="current-password" required></label>
       <button class="btn primary" type="submit">Entrar</button>
-      <div class="alt"><button type="button" id="semLogin">Ver os dados embutidos, sem entrar</button></div>
+      <div class="alt"><button type="button" id="semLogin">Ver os preços sem entrar</button></div>
     </form>`;
     document.body.appendChild(el);
     const form = el.querySelector('form'), erro = el.querySelector('.erro');
@@ -1371,7 +1374,7 @@ function renderDados(){
   const p = INFO.planilha;
   const linhasTot = STORES.reduce((a,s)=>a+s.rows.length,0);
   const ult = INFO.importacoes[0];
-  let h = `<div class="dados">
+  let h = `<div class="dados">` + (INFO.logado ? `
     <div class="card">
       <h3>Planilha conectada</h3>
       <p>${p && p.url
@@ -1387,7 +1390,12 @@ function renderDados(){
         A importação substitui todos os dados; seus ajustes de precificação não são apagados.
       </p>
       <div id="statusImport" style="margin-top:10px">${INFO.status}</div>
-    </div>
+    </div>` : `
+    <div class="card">
+      <h3>Planilha conectada</h3>
+      <p>Os números vêm da última importação feita por quem administra o painel.
+      <b>Entre na sua conta</b> para atualizar a partir do Google Sheets.</p>
+    </div>`) + `
 
     <div class="card">
       <h3>O que está no banco agora</h3>
@@ -1420,14 +1428,19 @@ function renderDados(){
       `</tbody></table></div></div>`;
   }
 
-  h += `<div class="card"><h3>Sessão</h3><p>Conectado como ${esc(SB && SB.email || '—')}.</p>
-    <button class="btn" id="btnSair">Sair</button></div></div>`;
+  h += INFO.logado
+    ? `<div class="card"><h3>Sessão</h3><p>Conectado como ${esc(SB && SB.email || '—')}.</p>
+    <button class="btn" id="btnSair">Sair</button></div></div>`
+    : `<div class="card"><h3>Sessão</h3><p>Você está vendo sem entrar. Os números são os da última importação e valem para todo mundo.</p>
+    <button class="btn" id="btnEntrar">Entrar</button></div></div>`;
 
   alvo.innerHTML = h;
   const btn = document.getElementById('btnImportar');
   if(btn) btn.onclick = importarPlanilha;
   const sair = document.getElementById('btnSair');
   if(sair) sair.onclick = sairDaConta;
+  const entrar = document.getElementById('btnEntrar');
+  if(entrar) entrar.onclick = () => location.reload();
 }
 
 // O leitor de .xlsx (SheetJS) só é carregado quando você clica em Atualizar.
@@ -1475,7 +1488,7 @@ async function importarPlanilha(){
     }
 
     passo(`Gravando ${linhas.toLocaleString('pt-BR')} linhas no banco…`);
-    await SB.req('/rest/v1/rpc/importar_dados', { method:'POST', body:{
+    await SB.req('/rest/v1/rpc/importar_dados', { method:'POST', exigeSessao:true, body:{
       p: dados,
       p_url: url,
       p_resumo: {
@@ -1499,7 +1512,7 @@ async function importarPlanilha(){
   }catch(e){
     INFO.status = `<div class="falha">${esc(e.message)}</div>`;
     status.innerHTML = INFO.status;
-    try{ await SB.req('/rest/v1/rpc/registrar_falha', {method:'POST', body:{p_url: url, p_erro: String(e.message).slice(0, 500)}}); }catch(e2){}
+    try{ await SB.req('/rest/v1/rpc/registrar_falha', {method:'POST', exigeSessao:true, body:{p_url: url, p_erro: String(e.message).slice(0, 500)}}); }catch(e2){}
   }finally{
     btn.disabled = false; btn.textContent = 'Atualizar dados';
   }
@@ -1623,10 +1636,12 @@ async function bootLocal(){
 async function bootSupabase(){
   let entrou = SB.logado;
   if(!entrou) entrou = await telaLogin();
-  while(entrou){
+  // Carrega do banco sempre — logado ou não. A leitura é pública, então quem só
+  // quer consultar vê os mesmos números da última importação.
+  for(;;){
     try{ await carregarDoBanco(); break; }
     catch(e){
-      if(e.semSessao || e.status === 401){ SB.sair(); entrou = await telaLogin('Sua sessão expirou. Entre de novo.'); continue; }
+      if(entrou && (e.semSessao || e.status === 401)){ SB.sair(); entrou = await telaLogin('Sua sessão expirou. Entre de novo.'); continue; }
       toast('Não deu para ler o banco: ' + e.message);
       break;
     }

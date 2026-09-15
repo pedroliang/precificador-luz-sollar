@@ -73,8 +73,10 @@ Depois, em **Authentication → Sign In / Providers → Email**, desligue
 
 O `config.js` já vem preenchido com a *Project URL* e a chave *anon* deste projeto.
 
-A chave `anon` pode ficar no repositório: sozinha ela não lê nada, porque todas as
-tabelas exigem login (RLS). **A chave `service_role` nunca entra aqui.**
+A chave `anon` pode ficar no repositório. Com ela se **lê** os dados do painel —
+isso é intencional: quem abre o site sem entrar vê os preços da última importação.
+Escrever, importar e ver o link da planilha exigem login.
+**A chave `service_role` nunca entra aqui.**
 
 ### 5. Função de importação — já está publicada
 

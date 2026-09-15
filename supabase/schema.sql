@@ -104,7 +104,19 @@ begin
     for select to authenticated using (true);
   create policy estado_escrita on public.estado
     for all to authenticated using (true) with check (true);
+
+  -- LEITURA PÚBLICA: quem abre o site sem entrar enxerga os dados do painel.
+  -- Só leitura, e só destas quatro tabelas — "config" e "importacoes" ficam de
+  -- fora de propósito, porque guardam o link do Google Sheets.
+  foreach t in array array['lojas','produtos','linhas','estado'] loop
+    execute format('drop policy if exists %I on public.%I', t || '_leitura_anon', t);
+    execute format(
+      'create policy %I on public.%I for select to anon using (true)',
+      t || '_leitura_anon', t);
+  end loop;
 end $$;
+
+grant select on public.lojas, public.produtos, public.linhas, public.estado to anon;
 
 -- --------------------------------------------------------------- funções ---
 
@@ -127,9 +139,10 @@ begin
     raise exception 'Nenhuma aba de loja foi reconhecida na planilha.';
   end if;
 
-  delete from public.linhas;
-  delete from public.lojas;
-  delete from public.produtos;
+  -- TRUNCATE em vez de DELETE: o papel "authenticator" (PostgREST) carrega a
+  -- biblioteca "safeupdate", que rejeita DELETE sem WHERE em qualquer consulta
+  -- da sessão — inclusive dentro de funções SECURITY DEFINER.
+  truncate table public.linhas, public.lojas, public.produtos;
 
   insert into public.lojas (id, nome, plataforma, ordem, padroes, fixos, canais)
   select
