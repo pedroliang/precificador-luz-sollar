@@ -17,6 +17,8 @@ Funciona de dois jeitos:
 
 - **8 lojas** num seletor: Luz Sollar, E-Steck, E-Brilia, E-Lumin, Apollo,
   Central Lux, Shopee e TikTok — o que existir na planilha.
+- **Todas as lojas**: a primeira opção do seletor mostra cada SKU em todas as lojas e
+  canais, agrupado, com os mesmos filtros, busca, edição e exportação.
 - **Variáveis da loja** editáveis: NF/Imposto, ADS, Lucro alvo, Devolução e comissões.
 - **Ajuste por produto**: custo, desconto, frete/taxa fixa, promoção ativa e rebate;
   ou travar manualmente preço mínimo, preço de venda e preço original.

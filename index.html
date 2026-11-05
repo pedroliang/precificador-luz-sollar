@@ -175,6 +175,10 @@ tbody tr{scroll-margin-top:40px}
 tbody tr:hover td{background:var(--surface-2)}
 tbody tr.sel td{background:var(--accent-soft)}
 td.sku{font-family:"IBM Plex Mono",monospace;font-size:11.5px;color:var(--text-3)}
+th.loja,td.loja{position:sticky;left:0;z-index:2;background:var(--surface);border-right:1px solid var(--line);font-weight:600}
+th.loja{z-index:21;background:var(--surface-2)}
+td.loja .canal{margin-left:7px;font-size:11px;font-weight:400;color:var(--text-3)}
+tbody tr.grp td{border-top:2px solid var(--line)}
 td.prod{max-width:330px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
 td.num{font-family:"IBM Plex Mono",monospace;font-variant-numeric:tabular-nums}
 td.ed{cursor:text;position:relative}
@@ -350,7 +354,7 @@ dialog::backdrop{background:rgba(8,16,24,.5)}
 "use strict";
 const DATA = JSON.parse(document.getElementById('dataset').textContent);
 let STORES = DATA.stores, PRODUTOS = DATA.produtos;
-const VERSAO = '15/09 leitura pública';
+const VERSAO = '05/11 todas as lojas';
 const CFG = window.PRECIFICADOR_CONFIG || null;
 const MODO = (CFG && CFG.url && CFG.anonKey) ? 'supabase' : 'local';
 
@@ -518,13 +522,16 @@ function marginColor(v, alvo){
 }
 
 /* ============ UI state ============ */
+const TODAS = '__todas__';
+function ehTodas(){ return ui.store === TODAS; }
 let ui = {
   store: (STORES[0] || {}).id,
   chan: 'cls',
+  chanTodas: 'todos',
   q: '',
   tab: 'prec',
   limit: 150,
-  sel: null,
+  sel: null, selStore: null, selChan: null,
   filters: {promo:false, neg:false, mod:false, abaixo:false, semCusto:false},
   panel: window.innerWidth > 900
 };
@@ -640,9 +647,11 @@ const RATE_LABELS = {
 };
 function renderPanel(){
   const st = storeById(ui.store);
-  const keys = rateKeys(st);
-  const sr = state.rates[st.id] || {};
+  const keys = st ? rateKeys(st) : [];
+  const sr = st ? (state.rates[st.id] || {}) : {};
   let h = '<div class="pgroup"><span class="lbl">Variáveis da loja</span>';
+  if(!st) h += `<p class="note">Cada linha usa as variáveis da própria loja. Para alterá-las, escolha uma loja no seletor.</p></div>`;
+  else {
   keys.forEach(k=>{
     const cur = sr[k]!=null ? sr[k] : rateBaseline(st, k);
     const L = RATE_LABELS[k] || [k,''];
@@ -651,6 +660,7 @@ function renderPanel(){
   });
   h += `<div style="display:flex;gap:6px;margin-top:9px"><button class="btn" id="resetRates" style="flex:1">Restaurar padrões</button></div>`;
   h += `<p class="note" style="margin-top:11px">Todas em %. Ao alterar aqui, o valor passa a valer para todos os produtos da loja — só não vale nas linhas em que você travou uma taxa específica no painel do produto.</p></div>`;
+  }
 
   h += `<div class="pgroup"><span class="lbl">Como ler as cores</span>
     <div class="vrow"><label><span class="pill pos">verde</span> margem igual ou acima do lucro alvo</label></div>
@@ -683,7 +693,7 @@ function renderPanel(){
       markDirty(); renderPanel(); renderTable(); renderKpis(); if(ui.sel!=null) renderDrawer();
     });
   });
-  document.getElementById('resetRates').onclick = ()=>{ delete state.rates[st.id]; markDirty(); renderPanel(); renderTable(); renderKpis(); };
+  if(st) document.getElementById('resetRates').onclick = ()=>{ delete state.rates[st.id]; markDirty(); renderPanel(); renderTable(); renderKpis(); };
   document.getElementById('resetAll').onclick = ()=>{
     if(!confirm('Descartar todos os ajustes feitos aqui e voltar aos valores da planilha?')) return;
     state = BLANK(); markDirty(); renderAll();
@@ -702,41 +712,74 @@ function matchQuery(store, i, q){
   const cat = PRODUTOS[row.sku] ? String(PRODUTOS[row.sku][0]).toLowerCase() : '';
   return q.split(/\s+/).every(t => sku.includes(t) || nome.includes(t) || cat.includes(t));
 }
+function passaFiltros(st, i, chan){
+  const f = ui.filters;
+  if(f.promo || f.neg || f.abaixo || f.semCusto){
+    const c = calc(st, i, chan);
+    if(f.promo && c.promo==null) return false;
+    if(f.neg && !(c.margem!=null && c.margem < -MARGIN_EPS)) return false;
+    if(f.abaixo && !(c.mktAvg!=null && c.ven!=null && c.ven > c.mktAvg)) return false;
+    if(f.semCusto && c.custo!=null) return false;
+  }
+  return !(f.mod && !edits(st.id, i));
+}
 function filtered(){
   const st = storeById(ui.store);
   const q = ui.q.trim().toLowerCase();
   const out = [];
   for(let i=0;i<st.rows.length;i++){
     if(!matchQuery(st, i, q)) continue;
-    const f = ui.filters;
-    if(f.promo || f.neg || f.abaixo || f.semCusto){
-      const c = calc(st, i, ui.chan);
-      if(f.promo && c.promo==null) continue;
-      if(f.neg && !(c.margem!=null && c.margem < -MARGIN_EPS)) continue;
-      if(f.abaixo && !(c.mktAvg!=null && c.ven!=null && c.ven > c.mktAvg)) continue;
-      if(f.semCusto && c.custo!=null) continue;
-    }
-    if(ui.filters.mod && !edits(st.id, i)) continue;
-    out.push(i);
+    if(passaFiltros(st, i, ui.chan)) out.push(i);
   }
   return out;
+}
+/* Clássico/Premium só existem em parte das lojas: as demais (Shopee, TikTok)
+   seguem aparecendo com o canal único delas. */
+function canaisVisiveis(st){
+  const f = ui.chanTodas;
+  if(f==='todos' || !st.canais.some(c=>c.key===f)) return st.canais;
+  return st.canais.filter(c=>c.key===f);
+}
+const ordemSku = new Intl.Collator('pt-BR',{numeric:true}).compare;
+/* Uma entrada por loja + canal, com o mesmo SKU sempre agrupado. */
+function filtradosTodas(){
+  const q = ui.q.trim().toLowerCase();
+  const out = [];
+  STORES.forEach(st=>{
+    const canais = canaisVisiveis(st);
+    for(let i=0;i<st.rows.length;i++){
+      if(!matchQuery(st, i, q)) continue;
+      canais.forEach(ch=>{ if(passaFiltros(st, i, ch.key)) out.push({st, i, chan:ch.key, canal:ch.label}); });
+    }
+  });
+  return out.sort((a,b)=>{
+    const sa = String(a.st.rows[a.i].sku||''), sb = String(b.st.rows[b.i].sku||'');
+    if(!sa !== !sb) return sa ? -1 : 1; // linhas sem SKU ficam no fim
+    return ordemSku(sa, sb);
+  });
 }
 
 /* ============ KPIs ============ */
 function renderKpis(){
-  const st = storeById(ui.store);
-  const idx = filtered();
-  let neg=0, promo=0, mod=0, semCusto=0, msum=0, mn=0, abaixo=0;
-  idx.forEach(i=>{
-    const c = calc(st, i, ui.chan);
+  const todas = ehTodas();
+  const st = todas ? null : storeById(ui.store);
+  const idx = todas ? filtradosTodas() : filtered().map(i=>({st, i, chan:ui.chan}));
+  let neg=0, promo=0, semCusto=0, msum=0, mn=0, abaixo=0;
+  const skus = new Set(), lojas = new Set(), editadas = new Set();
+  idx.forEach(x=>{
+    const c = calc(x.st, x.i, x.chan);
     if(c.promo!=null){ promo++; if(c.margem!=null && c.margem < -MARGIN_EPS) neg++; }
-    if(edits(st.id,i)) mod++;
+    if(edits(x.st.id,x.i)) editadas.add(x.st.id+'|'+x.i);
     if(c.custo==null) semCusto++;
     if(c.margemVenda!=null){ msum+=c.margemVenda; mn++; }
     if(c.mktAvg!=null && c.ven!=null && c.ven>c.mktAvg) abaixo++;
+    skus.add(x.st.rows[x.i].sku); lojas.add(x.st.id);
   });
+  const mod = editadas.size;
   const tiles = [
-    ['Produtos', idx.length.toLocaleString('pt-BR'), semCusto ? semCusto+' sem custo cadastrado' : st.rows.length.toLocaleString('pt-BR')+' na aba', ''],
+    todas
+      ? ['Produtos', skus.size.toLocaleString('pt-BR'), `${idx.length.toLocaleString('pt-BR')} preços em ${lojas.size} loja${lojas.size===1?'':'s'}`, '']
+      : ['Produtos', idx.length.toLocaleString('pt-BR'), semCusto ? semCusto+' sem custo cadastrado' : st.rows.length.toLocaleString('pt-BR')+' na aba', ''],
     ['Margem média · venda', fmtPct(mn?msum/mn:null), mn+' itens calculados', 'good'],
     ['Promoções ativas', promo.toLocaleString('pt-BR'), 'com preço promocional', ''],
     ['Margem negativa', neg.toLocaleString('pt-BR'), 'na promoção ativa', neg?'alert':''],
@@ -779,12 +822,19 @@ function cols(){
   }
   return c;
 }
+function colsTodas(){
+  const c = COLS_MELI.map(x=>Object.assign({}, x));
+  c.unshift({k:'loja', l:'Loja · Canal', cls:'l loja'});
+  c.forEach(x=>{ if(x.k==='frete'){ delete x.ed; x.fx = 1; } });
+  return c;
+}
 function renderTable(){
   if(ui.tab==='dados') return renderDados();
   if(ui.tab==='custo') return renderCusto();
-  const st = storeById(ui.store);
-  const C = cols();
-  const idx = filtered();
+  const todas = ehTodas();
+  const loja = todas ? null : storeById(ui.store);
+  const C = todas ? colsTodas() : cols();
+  const idx = todas ? filtradosTodas() : filtered().map(i=>({st:loja, i, chan:ui.chan}));
   document.getElementById('cPrec').textContent = idx.length.toLocaleString('pt-BR');
   document.getElementById('cCusto').textContent = Object.keys(PRODUTOS).length.toLocaleString('pt-BR');
   if(!idx.length){
@@ -792,13 +842,20 @@ function renderTable(){
     return;
   }
   const shown = idx.slice(0, ui.limit);
-  let h = '<table><thead><tr>' + C.map(c=>`<th class="${c.cls&&c.cls.includes('l')?'l':''} ${c.sep?'sep':''}">${c.l}</th>`).join('') + '</tr></thead><tbody>';
-  shown.forEach(i=>{
-    const row = st.rows[i], c = calc(st, i, ui.chan);
+  let h = '<table><thead><tr>' + C.map(c=>`<th class="${c.cls&&c.cls.includes('l')?'l':''} ${c.k==='loja'?'loja':''} ${c.sep?'sep':''}">${c.l}</th>`).join('') + '</tr></thead><tbody>';
+  let skuAnterior = null;
+  shown.forEach((x, pos)=>{
+    const {st, i, chan} = x;
+    const row = st.rows[i], c = calc(st, i, chan);
     const e = edits(st.id, i);
-    h += `<tr data-i="${i}" class="${ui.sel===i?'sel':''}">`;
+    const ctx = todas ? `data-s="${esc(st.id)}" data-c="${esc(chan)}"` : '';
+    const sel = ui.sel===i && (!todas || (ui.selStore===st.id && ui.selChan===chan));
+    const grupo = todas && pos>0 && row.sku!==skuAnterior;
+    skuAnterior = row.sku;
+    h += `<tr data-i="${i}" ${ctx} class="${sel?'sel':''} ${grupo?'grp':''}">`;
     C.forEach(col=>{
       const sep = col.sep?'sep ':'';
+      if(col.k==='loja'){ h += `<td class="l loja">${esc(st.nome)}<span class="canal">${esc(x.canal)}</span></td>`; return; }
       if(col.k==='sku'){ h += `<td class="l sku ${sep}">${esc(row.sku)}</td>`; return; }
       if(col.k==='nome'){ h += `<td class="l prod ${sep}" title="${esc(row.nome)}">${esc(row.nome)}</td>`; return; }
       if(col.k==='delta'){
@@ -820,13 +877,19 @@ function renderTable(){
         h += `<td class="num ${sep}">${p}</td>`; return;
       }
       let val, mod=false, edf=null;
-      if(col.ed){ val = fieldOf(st,i,col.ed); mod = !!(e && e[col.ed]!=null); edf='f:'+col.ed; if(col.ed==='custo'){ val=c.custo; mod = !!(e&&e.custo!=null); } }
+      if(col.fx){
+        val = c.fixos;
+        if(st.fixos.length===1){ const k = st.fixos[0].key; mod = !!(e && e[k]!=null); edf = 'f:'+k; }
+      }
+      else if(col.edr && st.plat!=='meli'){ val = null; }
+      else if(col.k==='lucroFinal' && st.plat!=='meli'){ val = c.lucro; }
+      else if(col.ed){ val = fieldOf(st,i,col.ed); mod = !!(e && e[col.ed]!=null); edf='f:'+col.ed; if(col.ed==='custo'){ val=c.custo; mod = !!(e&&e.custo!=null); } }
       else if(col.edp){ val = c.promo; mod = !!(e && e[c.promoKey]!=null); edf='f:'+c.promoKey; }
       else if(col.edr){ val = rawField(st,i,c.rebKey); mod = !!(e && e[c.rebKey]!=null); edf='f:'+c.rebKey; }
-      else if(col.ov){ val = c[col.k]; mod = !!(e && e.ov && (ui.chan+col.ov) in e.ov); edf='o:'+ui.chan+col.ov; }
+      else if(col.ov){ val = c[col.k]; mod = !!(e && e.ov && (chan+col.ov) in e.ov); edf='o:'+chan+col.ov; }
       else val = c[col.k];
       const txt = col.pct ? (val==null?'—':fmtPct(val)) : (col.money ? fmtBRL(val) : fmtNum(val));
-      h += `<td class="num ${sep}${edf?'ed ':''}${mod?'mod ':''}${col.dim?'dim ':''}${col.strong?'':''}" ${edf?`data-ed="${edf}" data-i="${i}"`:''}>${txt}</td>`;
+      h += `<td class="num ${sep}${edf?'ed ':''}${mod?'mod ':''}${col.dim?'dim ':''}${col.strong?'':''}" ${edf?`data-ed="${edf}" data-i="${i}" ${ctx}`:''}>${txt}</td>`;
     });
     h += '</tr>';
   });
@@ -845,10 +908,14 @@ document.addEventListener('click', ev=>{
   if(td && !td.querySelector('input')){ startEdit(td); return; }
   if(ev.target.closest('td.ed')) return;
   const tr = ev.target.closest('tbody tr[data-i]');
-  if(tr && !ev.target.closest('td.ed')){ ui.sel = +tr.dataset.i; renderTable(); openDrawer(); }
+  if(tr && !ev.target.closest('td.ed')){
+    ui.sel = +tr.dataset.i; ui.selStore = tr.dataset.s ?? null; ui.selChan = tr.dataset.c ?? null;
+    renderTable(); openDrawer();
+  }
 });
 function startEdit(td){
-  const st = storeById(ui.store);
+  const st = storeById(td.dataset.s ?? ui.store);
+  const chan = td.dataset.c ?? ui.chan;
   const i = +td.dataset.i, spec = td.dataset.ed;
   const kind = spec.slice(0,1), key = spec.slice(2);
   let cur;
@@ -857,7 +924,7 @@ function startEdit(td){
     else if(key==='desc') cur = fieldOf(st,i,'desc')*100;
     else cur = rawField(st,i,key);
   } else {
-    const c = calc(st,i,ui.chan);
+    const c = calc(st,i,chan);
     const map = {_min:'min',_ven:'ven',_ori:'ori'};
     cur = c[map[key.slice(3)]];
   }
@@ -942,13 +1009,14 @@ function openDrawer(){ renderDrawer(); document.getElementById('drawer').classLi
   document.getElementById('drawer').setAttribute('aria-hidden','false'); document.getElementById('scrim').classList.add('on'); }
 function closeDrawer(){ document.getElementById('drawer').classList.remove('on');
   document.getElementById('drawer').setAttribute('aria-hidden','true'); document.getElementById('scrim').classList.remove('on');
-  ui.sel=null; renderTable(); }
+  ui.sel=null; ui.selStore=null; ui.selChan=null; renderTable(); }
 document.getElementById('scrim').onclick = closeDrawer;
 
 function renderDrawer(){
   if(ui.sel==null) return;
-  const st = storeById(ui.store), i = ui.sel, row = st.rows[i], c = calc(st, i, ui.chan);
-  const chanLabel = (st.canais.find(x=>x.key===ui.chan)||st.canais[0]).label;
+  const st = storeById(ui.selStore ?? ui.store), chan = ui.selChan ?? ui.chan;
+  const i = ui.sel, row = st.rows[i], c = calc(st, i, chan);
+  const chanLabel = (st.canais.find(x=>x.key===chan)||st.canais[0]).label;
   const cat = PRODUTOS[row.sku];
   const inputs = [];
   inputs.push(['custo','Custo (R$)', c.custo, 'money']);
@@ -978,9 +1046,9 @@ function renderDrawer(){
     `</div></div>`;
 
   h += `<div class="dsec"><span class="lbl">Preços calculados — ${esc(chanLabel)}</span><div class="grid2">
-    <label class="fld"><span>Preço mínimo</span><input data-dov="${ui.chan}_min" value="${c.min==null?'':fmtNum(c.min)}"></label>
-    <label class="fld"><span>Preço de venda</span><input data-dov="${ui.chan}_ven" value="${c.ven==null?'':fmtNum(c.ven)}"></label>
-    <label class="fld"><span>Preço original (÷0,8)</span><input data-dov="${ui.chan}_ori" value="${c.ori==null?'':fmtNum(c.ori)}"></label>
+    <label class="fld"><span>Preço mínimo</span><input data-dov="${chan}_min" value="${c.min==null?'':fmtNum(c.min)}"></label>
+    <label class="fld"><span>Preço de venda</span><input data-dov="${chan}_ven" value="${c.ven==null?'':fmtNum(c.ven)}"></label>
+    <label class="fld"><span>Preço original (÷0,8)</span><input data-dov="${chan}_ori" value="${c.ori==null?'':fmtNum(c.ori)}"></label>
     <div class="fld out"><span>Margem no preço de venda</span><b style="color:${marginColor(c.margemVenda, c.lucroPct)}">${fmtPct(c.margemVenda)}</b></div>
   </div>
   <p class="note" style="margin-top:8px">Editar um preço aqui cria uma trava manual (como um valor digitado na planilha). Deixe em branco para voltar à fórmula.</p></div>`;
@@ -1001,7 +1069,7 @@ function renderDrawer(){
       const L = RATE_LABELS[k]||[k,''];
       const v = rateOf(st,i,k);
       const isChan = (k==='cls'||k==='prm'||k==='com');
-      if(isChan && k!==ui.chan && st.plat==='meli') return '';
+      if(isChan && k!==chan && st.plat==='meli') return '';
       return `<label class="fld"><span>${L[0]} (%)</span><input data-drate="${k}" value="${(v*100).toLocaleString('pt-BR',{maximumFractionDigits:2})}"></label>`;
     }).join('') + `</div><p class="note" style="margin-top:8px">Alterar aqui vale só para este produto. Para mudar a loja inteira, use o painel de variáveis.</p></div>`;
 
@@ -1062,7 +1130,22 @@ function renderDrawer(){
 }
 
 /* ============ CSV ============ */
+function buildCSVTodas(){
+  const heads = ['Loja','Canal','Linha','SKU','Produto','Custo','Desconto','Custo liq','Frete/Fixo',
+    'Preço mínimo','Preço venda','Preço original','Margem venda','Promoção','Lucro','Margem','Preço médio mercado'];
+  const br = n => n==null||!isFinite(n) ? '' : n.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
+  const pc = n => n==null||!isFinite(n) ? '' : br(n*100)+'%';
+  const lines = [heads.join('\t')];
+  filtradosTodas().forEach(x=>{
+    const row = x.st.rows[x.i], c = calc(x.st, x.i, x.chan);
+    lines.push([x.st.nome, x.canal, row.r, row.sku, String(row.nome||'').replace(/[\t\n]/g,' '),
+      br(c.custo), br(c.desc*100)+'%', br(c.custoLiq), br(c.fixos),
+      br(c.min), br(c.ven), br(c.ori), pc(c.margemVenda), br(c.promo), br(c.lucroFinal), pc(c.margem), br(c.mktAvg)].join('\t'));
+  });
+  return lines.join('\n');
+}
 function buildCSV(){
+  if(ehTodas()) return buildCSVTodas();
   const st = storeById(ui.store);
   const idx = filtered();
   const heads = ['Linha','SKU','Produto','Custo','Desconto','Custo liq','Frete/Fixo'];
@@ -1089,8 +1172,7 @@ function buildCSV(){
 }
 async function exportCSV(){
   const txt = buildCSV();
-  const st = storeById(ui.store);
-  const name = 'precos-' + st.nome.toLowerCase().replace(/[^a-z0-9]+/g,'-');
+  const name = 'precos-' + (ehTodas() ? 'todas-as-lojas' : storeById(ui.store).nome.toLowerCase().replace(/[^a-z0-9]+/g,'-'));
   let saved = false;
   try{
     const dl = await window.claude?.use?.('downloads');
@@ -1502,9 +1584,7 @@ async function importarPlanilha(){
 
     passo('Recarregando os dados…');
     await carregarDoBanco();
-    if(!STORES.some(l => l.id === ui.store)) ui.store = lojaPadrao();
-    const st = storeById(ui.store);
-    if(!st.canais.some(c => c.key === ui.chan)) ui.chan = st.canais[0].key;
+    garantirLoja();
     INFO.status = `<div class="ok">Importado: ${linhas.toLocaleString('pt-BR')} linhas, `
       + `${Object.keys(PRODUTOS).length.toLocaleString('pt-BR')} produtos, ${STORES.length} loja(s).</div>`;
     buildLojas(); buildChan(); renderPanel(); renderKpis(); renderDados();
@@ -1560,7 +1640,8 @@ window.addEventListener('beforeunload', ev => {
 
 function buildLojas(){
   const sel = document.getElementById('storeSel');
-  sel.innerHTML = STORES.map(s=>`<option value="${esc(s.id)}">${esc(s.nome)}</option>`).join('');
+  sel.innerHTML = `<option value="${TODAS}">Todas as lojas</option>` +
+    STORES.map(s=>`<option value="${esc(s.id)}">${esc(s.nome)}</option>`).join('');
   sel.value = ui.store;
 }
 function buildChrome(){
@@ -1568,8 +1649,7 @@ function buildChrome(){
   buildLojas();
   sel.onchange = ()=>{ ui.store = sel.value;
     try{ localStorage.setItem('precificador-loja', ui.store); }catch(e){}
-    const st = storeById(ui.store);
-    if(!st.canais.some(c=>c.key===ui.chan)) ui.chan = st.canais[0].key;
+    garantirLoja();
     ui.limit=150; ui.sel=null; closeDrawer(); buildChan(); renderAll(); };
   buildChan();
   document.getElementById('q').addEventListener('input', e=>{ ui.q = e.target.value; ui.limit=150; renderTable(); renderKpis(); });
@@ -1595,6 +1675,14 @@ function buildChrome(){
   });
 }
 function buildChan(){
+  if(ehTodas()){
+    document.getElementById('chanSeg').innerHTML = [['todos','Todos'],['cls','Clássico'],['prm','Premium']].map(([k,l])=>
+      `<button data-ch="${k}" aria-pressed="${k===ui.chanTodas}">${l}</button>`).join('');
+    document.getElementById('chanSeg').querySelectorAll('[data-ch]').forEach(b=>{
+      b.onclick = ()=>{ ui.chanTodas = b.dataset.ch; ui.limit=150; buildChan(); renderTable(); renderKpis(); };
+    });
+    return;
+  }
   const st = storeById(ui.store);
   document.getElementById('chanSeg').innerHTML = st.canais.map(c=>
     `<button data-ch="${c.key}" aria-pressed="${c.key===ui.chan}">${c.label}</button>`).join('');
@@ -1658,15 +1746,21 @@ async function bootSupabase(){
   INFO.logado = !!entrou && SB.logado;
   if(!entrou) toast('Sem login: os ajustes ficam só neste navegador.');
   else if(dirty) toast('Você tem ajustes ainda não salvos no banco. Clique em Salvar para valerem em todos os computadores.');
-  if(!STORES.some(s=>s.id===ui.store)) ui.store = lojaPadrao();
-  const st = storeById(ui.store);
-  if(!st.canais.some(c=>c.key===ui.chan)) ui.chan = st.canais[0].key;
+  garantirLoja();
   buildLojas(); buildChan();
 }
 
+/** Depois de recarregar os dados, a loja e o canal escolhidos podem não existir mais. */
+function garantirLoja(){
+  if(ehTodas()) return;
+  if(!STORES.some(s=>s.id===ui.store)) ui.store = lojaPadrao();
+  const st = storeById(ui.store);
+  if(st && !st.canais.some(c=>c.key===ui.chan)) ui.chan = st.canais[0].key;
+}
 function lojaPadrao(){
   let ultima = null;
   try{ ultima = localStorage.getItem('precificador-loja'); }catch(e){}
+  if(ultima === TODAS) return TODAS;
   if(ultima && STORES.some(s=>s.id===ultima)) return ultima;
   const preferida = STORES.find(s=>/luz\s*sollar/i.test(s.nome + ' ' + s.id));
   return (preferida || STORES[0]).id;
